@@ -20,7 +20,6 @@ async function collectSnapshots() {
     const startTime = Date.now();
 
     try {
-        // Get monitored entities (excluding ignored ones)
         const monitoredEntities = getMonitoredEntities()
             .filter(e => e.priority !== 'ignore');
 
@@ -29,17 +28,14 @@ async function collectSnapshots() {
             return { collected: 0, skipped: false };
         }
 
-        // Fetch current states from HA
         const allStates = await getAllStates();
         const stateMap = new Map(allStates.map(s => [s.entity_id, s]));
 
-        // Create timestamp for this collection
         const timestamp = new Date().toISOString();
-
-        // Build snapshots array
         const snapshots = [];
 
         for (const entity of monitoredEntities) {
+
             const state = stateMap.get(entity.entity_id);
 
             if (!state) {
@@ -50,17 +46,17 @@ async function collectSnapshots() {
                 continue;
             }
 
-            // Skip unavailable entities
             if (state.state === 'unavailable' || state.state === 'unknown') {
                 continue;
             }
 
-            // Determine value type and extract value
             const numValue = parseFloat(state.state);
             const isNumeric = !isNaN(numValue) && isFinite(numValue);
 
-            // Extract relevant attributes based on domain
-            const relevantAttrs = extractRelevantAttributes(entity.domain, state.attributes);
+            const relevantAttrs = extractRelevantAttributes(
+                entity.domain,
+                state.attributes
+            );
 
             snapshots.push({
                 entity_id: entity.entity_id,
@@ -72,7 +68,6 @@ async function collectSnapshots() {
             });
         }
 
-        // Store all snapshots
         if (snapshots.length > 0) {
             addSnapshots(snapshots);
         }
@@ -88,6 +83,7 @@ async function collectSnapshots() {
             duration,
             skipped: false
         };
+
     } catch (error) {
         console.error('Collection failed:', error);
         collectionErrors.push({ error: error.message });
@@ -101,18 +97,53 @@ async function collectSnapshots() {
  * Extract only relevant attributes to minimize storage
  */
 function extractRelevantAttributes(domain, attributes) {
+
     const relevant = {};
 
-    // Common useful attributes by domain
     const attrMap = {
-        climate: ['current_temperature', 'target_temperature', 'hvac_action', 'preset_mode'],
-        sensor: ['device_class', 'unit_of_measurement'],
-        binary_sensor: ['device_class'],
-        light: ['brightness', 'color_temp', 'rgb_color'],
+
+        climate: [
+            'current_temperature',
+            'temperature',
+            'hvac_mode',
+            'hvac_action',
+            'preset_mode',
+            'ema_temp'
+        ],
+
+        sensor: [
+            'device_class',
+            'unit_of_measurement'
+        ],
+
+        binary_sensor: [
+            'device_class'
+        ],
+
+        light: [
+            'brightness',
+            'color_temp',
+            'rgb_color'
+        ],
+
         switch: [],
-        cover: ['current_position'],
-        media_player: ['media_title', 'media_artist', 'volume_level'],
-        weather: ['temperature', 'humidity', 'pressure', 'wind_speed']
+
+        cover: [
+            'current_position'
+        ],
+
+        media_player: [
+            'media_title',
+            'media_artist',
+            'volume_level'
+        ],
+
+        weather: [
+            'temperature',
+            'humidity',
+            'pressure',
+            'wind_speed'
+        ]
     };
 
     const keysToExtract = attrMap[domain] || [];
@@ -123,6 +154,65 @@ function extractRelevantAttributes(domain, attributes) {
         }
     }
 
+    /*
+    --- Virtial Thermostat specific data ---
+    */
+
+    if (domain === 'climate') {
+
+        if (attributes.ext_current_temperature !== undefined) {
+            relevant.ext_current_temperature = attributes.ext_current_temperature;
+        }
+
+        if (attributes.total_energy !== undefined) {
+            relevant.total_energy = attributes.total_energy;
+        }
+
+        if (attributes.temperature_slope !== undefined) {
+            relevant.temperature_slope = attributes.temperature_slope;
+        }
+
+        const vt = attributes.vtherm_over_switch;
+
+        if (vt) {
+
+            if (vt.on_percent !== undefined)
+                relevant.on_percent = vt.on_percent;
+
+            if (vt.power_percent !== undefined)
+                relevant.power_percent = vt.power_percent;
+
+            if (vt.on_time_sec !== undefined)
+                relevant.on_time_sec = vt.on_time_sec;
+
+            if (vt.off_time_sec !== undefined)
+                relevant.off_time_sec = vt.off_time_sec;
+
+            if (vt.function !== undefined)
+                relevant.function = vt.function;
+
+            if (vt.tpi_coef_int !== undefined)
+                relevant.tpi_coef_int = vt.tpi_coef_int;
+
+            if (vt.tpi_coef_ext !== undefined)
+                relevant.tpi_coef_ext = vt.tpi_coef_ext;
+
+            if (vt.tpi_threshold_low !== undefined)
+                relevant.tpi_threshold_low = vt.tpi_threshold_low;
+
+            if (vt.tpi_threshold_high !== undefined)
+                relevant.tpi_threshold_high = vt.tpi_threshold_high;
+
+            if (vt.minimal_activation_delay !== undefined)
+                relevant.minimal_activation_delay = vt.minimal_activation_delay;
+
+            if (vt.minimal_deactivation_delay !== undefined)
+                relevant.minimal_deactivation_delay = vt.minimal_deactivation_delay;
+
+        }
+
+    }
+
     return relevant;
 }
 
@@ -130,24 +220,31 @@ function extractRelevantAttributes(domain, attributes) {
  * Clean up old snapshots beyond retention period
  */
 async function cleanupOldData() {
+
     const historyDays = parseInt(process.env.HISTORY_DAYS) || 7;
+
     const cutoffDate = new Date();
     cutoffDate.setDate(cutoffDate.getDate() - historyDays);
 
     const cutoffISO = cutoffDate.toISOString();
+
     const deletedCount = deleteOldSnapshots(cutoffISO);
 
     if (deletedCount > 0) {
         console.log(`Cleaned up ${deletedCount} old snapshots (before ${cutoffISO})`);
     }
 
-    return { deleted: deletedCount, cutoff: cutoffISO };
+    return {
+        deleted: deletedCount,
+        cutoff: cutoffISO
+    };
 }
 
 /**
  * Get collector status
  */
 function getCollectorStatus() {
+
     const stats = getSnapshotStats();
 
     return {
